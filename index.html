@@ -1463,8 +1463,8 @@
                         "shortName": "天文",
                         "icon": "🔭",
                         "color": "#5470c6",
-                        "progress": "7/101节点",
-                        "progressPercent": 6,
+                        "progress": "8/102节点",
+                        "progressPercent": 7,
                         "masteryPercent": 0,
                         "comingSoon": false
             },
@@ -1474,8 +1474,8 @@
                         "shortName": "历史",
                         "icon": "🏛️",
                         "color": "#c4a35a",
-                        "progress": "7/101节点",
-                        "progressPercent": 6,
+                        "progress": "8/102节点",
+                        "progressPercent": 7,
                         "masteryPercent": 2,
                         "comingSoon": false
             },
@@ -7030,6 +7030,26 @@
                         "difficulty": "简单",
                         "summary": "",
                         "knowledge_id": "astro-s2-7"
+            },
+            {
+                        "id": "astro_s1_7",
+                        "name": "星星的故事",
+                        "level": "L1",
+                        "status": "current",
+                        "domain": "astronomy",
+                        "difficulty": "简单",
+                        "summary": "",
+                        "knowledge_id": "astro-s1-7"
+            },
+            {
+                        "id": "civ_13_2",
+                        "name": "维京人与十字军",
+                        "level": "L1",
+                        "status": "current",
+                        "domain": "history",
+                        "difficulty": "简单",
+                        "summary": "",
+                        "knowledge_id": "civ-13-2"
             }
 ];
         
@@ -8174,6 +8194,7 @@
             const domainInfo = domains.find(d => d.id === domainId);
             if (domainInfo && domainInfo.comingSoon) {
                 // 显示即将开放提示
+                myChart.clear();
                 myChart.setOption({
                     series: [{
                         type: 'graph',
@@ -8190,39 +8211,12 @@
                 }, true);
                 return;
             }
-            // L2焦点模式：只展示有进度的节点及其直接邻居，避免100+节点堆叠
-            const domainNodes = allNodes.filter(n => n.domain === domainId);
-            const activeNodeIds = new Set(
-                domainNodes.filter(n => n.status === 'completed' || n.status === 'current').map(n => n.id)
-            );
-            // 收集活跃节点的直接邻居ID
-            const neighborIds = new Set(activeNodeIds);
-            allEdges.forEach(e => {
-                if (activeNodeIds.has(e.source)) neighborIds.add(e.target);
-                if (activeNodeIds.has(e.target)) neighborIds.add(e.source);
+            const filteredNodes = allNodes.filter(n => n.domain === domainId);
+            const filteredEdges = allEdges.filter(e => {
+                const sourceNode = allNodes.find(n => n.id === e.source);
+                const targetNode = allNodes.find(n => n.id === e.target);
+                return sourceNode?.domain === domainId && targetNode?.domain === domainId;
             });
-            // 也包含L1层节点（领域入口）
-            domainNodes.filter(n => n.level === 'L1').forEach(n => neighborIds.add(n.id));
-            
-            let filteredNodes, filteredEdges;
-            if (activeNodeIds.size <= 3) {
-                // 进度太少，显示全部节点但降低pending节点透明度
-                filteredNodes = domainNodes;
-                filteredEdges = allEdges.filter(e => {
-                    const s = allNodes.find(n => n.id === e.source);
-                    const t = allNodes.find(n => n.id === e.target);
-                    return s?.domain === domainId && t?.domain === domainId;
-                });
-            } else {
-                // 焦点模式：只显示活跃节点和邻居
-                filteredNodes = domainNodes.filter(n => neighborIds.has(n.id));
-                filteredEdges = allEdges.filter(e => {
-                    const s = allNodes.find(n => n.id === e.source);
-                    const t = allNodes.find(n => n.id === e.target);
-                    return s?.domain === domainId && t?.domain === domainId 
-                           && neighborIds.has(e.source) && neighborIds.has(e.target);
-                });
-            }
             console.log('L2渲染: domain=' + domainId + ', 节点数=' + filteredNodes.length + ', 边数=' + filteredEdges.length);
             
             const chartData = buildChartData(filteredNodes, filteredEdges, false);
@@ -8357,13 +8351,30 @@
         
         // ========== 节点闪烁 ==========
         function flashNode(nodeId) {
-            const nodeIndex = allNodes.findIndex(n => n.id === nodeId);
-            if (nodeIndex >= 0) {
-                myChart.dispatchAction({
-                    type: 'highlight',
-                    seriesIndex: 0,
-                    dataIndex: nodeIndex
-                });
+            // 必须从图表当前数据中查找index，不能用allNodes（L2/L3是子集）
+            try {
+                const option = myChart.getOption();
+                const seriesData = option?.series?.[0]?.data || [];
+                const nodeIndex = seriesData.findIndex(n => n.id === nodeId);
+                if (nodeIndex >= 0) {
+                    myChart.dispatchAction({
+                        type: 'highlight',
+                        seriesIndex: 0,
+                        dataIndex: nodeIndex
+                    });
+                    // 3秒后取消高亮
+                    setTimeout(() => {
+                        try {
+                            myChart.dispatchAction({
+                                type: 'downplay',
+                                seriesIndex: 0,
+                                dataIndex: nodeIndex
+                            });
+                        } catch(e) {}
+                    }, 3000);
+                }
+            } catch(e) {
+                console.warn('flashNode failed:', e.message);
             }
         }
         
@@ -8692,6 +8703,8 @@
                 series: series
             };
             
+            // 清除旧图表状态，避免残留数据导致渲染异常
+            myChart.clear();
             myChart.setOption(option, true);
         }
         
@@ -8836,14 +8849,18 @@
             const domainRoots = ['p1', 'a1', 'h1'];
             domainRoots.forEach((nodeId, idx) => {
                 setTimeout(() => {
-                    const nodeIndex = allNodes.findIndex(n => n.id === nodeId);
-                    if (nodeIndex >= 0) {
-                        myChart.dispatchAction({
-                            type: 'highlight',
-                            seriesIndex: 0,
-                            dataIndex: nodeIndex
-                        });
-                    }
+                    try {
+                        const option = myChart.getOption();
+                        const seriesData = option?.series?.[0]?.data || [];
+                        const nodeIndex = seriesData.findIndex(n => n.id === nodeId);
+                        if (nodeIndex >= 0) {
+                            myChart.dispatchAction({
+                                type: 'highlight',
+                                seriesIndex: 0,
+                                dataIndex: nodeIndex
+                            });
+                        }
+                    } catch(e) {}
                 }, idx * 300);
             });
             
@@ -8855,7 +8872,6 @@
         }
         
         // ========== 节点点击处理 ==========
-
         
         // ========== 显示触角气泡弹窗（跨领域推荐）==========
         function showTentacleCard(tentacleData) {
@@ -8972,10 +8988,8 @@
         }
         
         // ========== 点击空白区域取消选中 ==========
-
         
         // ========== 节点双击处理 ==========
-
         
         // ========== 显示节点卡片 ==========
         function showNodeCard(node) {
@@ -9213,16 +9227,16 @@
         
         // ========== 更新节点视觉样式 ==========
         function updateNodeVisual(nodeId, isSelected) {
-            const nodeIndex = allNodes.findIndex(n => n.id === nodeId);
-            if (nodeIndex < 0) return;
-            
             const node = allNodes.find(n => n.id === nodeId);
+            if (!node) return;
             const domainColor = domainColors[node.domain];
             
             if (isSelected) {
                 // 获取当前图表选项中的数据
                 const currentOption = myChart.getOption();
                 const currentData = currentOption.series[0].data;
+                // 基于图表实际数据查找index
+                const nodeIndex = currentData.findIndex(n => n.id === nodeId);
                 
                 // 重新设置所有节点的样式
                 const newData = currentData.map((n) => {
