@@ -1463,8 +1463,8 @@
                         "shortName": "天文",
                         "icon": "🔭",
                         "color": "#5470c6",
-                        "progress": "8/102节点",
-                        "progressPercent": 7,
+                        "progress": "7/101节点",
+                        "progressPercent": 6,
                         "masteryPercent": 0,
                         "comingSoon": false
             },
@@ -1474,8 +1474,8 @@
                         "shortName": "历史",
                         "icon": "🏛️",
                         "color": "#c4a35a",
-                        "progress": "8/102节点",
-                        "progressPercent": 7,
+                        "progress": "7/101节点",
+                        "progressPercent": 6,
                         "masteryPercent": 2,
                         "comingSoon": false
             },
@@ -7030,26 +7030,6 @@
                         "difficulty": "简单",
                         "summary": "",
                         "knowledge_id": "astro-s2-7"
-            },
-            {
-                        "id": "astro_s1_7",
-                        "name": "星星的故事",
-                        "level": "L1",
-                        "status": "current",
-                        "domain": "astronomy",
-                        "difficulty": "简单",
-                        "summary": "",
-                        "knowledge_id": "astro-s1-7"
-            },
-            {
-                        "id": "civ_13_2",
-                        "name": "维京人与十字军",
-                        "level": "L1",
-                        "status": "current",
-                        "domain": "history",
-                        "difficulty": "简单",
-                        "summary": "",
-                        "knowledge_id": "civ-13-2"
             }
 ];
         
@@ -8034,9 +8014,28 @@
         let chartDom, myChart;
         let nodeCardTimer = null;
         let highlightTimer = null;
+        let pendingFlashTimeouts = []; // 追踪所有flashNode的延时器
+
+        // ========== 安全重置图表状态（切换视图前调用）==========
+        function resetChartState() {
+            // 1. 取消所有待执行的flash延时器
+            pendingFlashTimeouts.forEach(t => clearTimeout(t));
+            pendingFlashTimeouts = [];
+            // 2. 取消高亮定时器
+            if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null; }
+            // 3. 取消节点卡片定时器
+            if (nodeCardTimer) { clearTimeout(nodeCardTimer); nodeCardTimer = null; }
+            // 4. 重置ECharts强调状态（关键：清除focusNodeAdjacency残留）
+            if (myChart) {
+                try { myChart.dispatchAction({type: 'downplay', seriesIndex: 0}); } catch(e) {}
+            }
+        }
         
         // ========== 层级切换 ==========
         function switchLayer(layer) {
+            // 切换前安全重置所有图表状态（关键修复：防止残留状态导致渲染崩溃）
+            resetChartState();
+            
             // 切换层级时清除L1选中状态
             if (currentLayer === 'L1' && selectedNodeId !== null) {
                 clearNodeSelection();
@@ -8194,21 +8193,25 @@
             const domainInfo = domains.find(d => d.id === domainId);
             if (domainInfo && domainInfo.comingSoon) {
                 // 显示即将开放提示
-                myChart.clear();
-                myChart.setOption({
-                    series: [{
-                        type: 'graph',
-                        data: [{
-                            name: domainInfo.shortName || domainId,
-                            symbolSize: 80,
-                            itemStyle: { color: domainInfo.color || '#666' },
-                            label: { show: true, formatter: '{b}\n\n🚧 即将开放', fontSize: 16, color: '#ccc' }
-                        }],
-                        links: [],
-                        roam: false,
-                        silent: true
-                    }]
-                }, true);
+                try {
+                    myChart.clear();
+                    myChart.setOption({
+                        series: [{
+                            type: 'graph',
+                            data: [{
+                                name: domainInfo.shortName || domainId,
+                                symbolSize: 80,
+                                itemStyle: { color: domainInfo.color || '#666' },
+                                label: { show: true, formatter: '{b}\n\n🚧 即将开放', fontSize: 16, color: '#ccc' }
+                            }],
+                            links: [],
+                            roam: false,
+                            silent: true
+                        }]
+                    }, true);
+                } catch(e) {
+                    console.warn('renderL2Graph comingSoon failed:', e.message);
+                }
                 return;
             }
             const filteredNodes = allNodes.filter(n => n.domain === domainId);
@@ -8362,8 +8365,11 @@
                         seriesIndex: 0,
                         dataIndex: nodeIndex
                     });
-                    // 3秒后取消高亮
-                    setTimeout(() => {
+                    // 3秒后取消高亮（延时器加入追踪列表，切换视图时自动取消）
+                    const tid = setTimeout(() => {
+                        // 从追踪列表移除
+                        const idx = pendingFlashTimeouts.indexOf(tid);
+                        if (idx >= 0) pendingFlashTimeouts.splice(idx, 1);
                         try {
                             myChart.dispatchAction({
                                 type: 'downplay',
@@ -8372,6 +8378,7 @@
                             });
                         } catch(e) {}
                     }, 3000);
+                    pendingFlashTimeouts.push(tid);
                 }
             } catch(e) {
                 console.warn('flashNode failed:', e.message);
@@ -8704,8 +8711,20 @@
             };
             
             // 清除旧图表状态，避免残留数据导致渲染异常
-            myChart.clear();
-            myChart.setOption(option, true);
+            try {
+                myChart.clear();
+                myChart.setOption(option, true);
+            } catch(e) {
+                // clear+setOption失败时，销毁重建图表实例（彻底清除残留状态）
+                console.warn('setOption failed, reinitializing chart:', e.message);
+                try { myChart.dispose(); } catch(e2) {}
+                chartDom = document.getElementById('chart');
+                myChart = echarts.init(chartDom, 'dark');
+                setupChartEvents();
+                try { myChart.setOption(option, true); } catch(e3) {
+                    console.error('setOption failed after reinit:', e3.message);
+                }
+            }
         }
         
         // ========== 卡片点击处理 ==========
@@ -8745,6 +8764,9 @@
         
         // ========== 渲染领域概览视图 ==========
         function renderDomainOverview() {
+            // 切换前重置图表状态
+            resetChartState();
+            
             // 确保显示ECharts，隐藏L1列表
             const l1ListContainer = document.getElementById('l1-list-container');
             const chartDom = document.getElementById('chart');
@@ -8848,7 +8870,10 @@
             // 高亮各领域根节点
             const domainRoots = ['p1', 'a1', 'h1'];
             domainRoots.forEach((nodeId, idx) => {
-                setTimeout(() => {
+                const tid = setTimeout(() => {
+                    // 从追踪列表移除
+                    const i = pendingFlashTimeouts.indexOf(tid);
+                    if (i >= 0) pendingFlashTimeouts.splice(i, 1);
                     try {
                         const option = myChart.getOption();
                         const seriesData = option?.series?.[0]?.data || [];
@@ -8862,10 +8887,11 @@
                         }
                     } catch(e) {}
                 }, idx * 300);
+                pendingFlashTimeouts.push(tid);
             });
             
             // 5秒后恢复正常
-            clearTimeout(highlightTimer);
+            if (highlightTimer) clearTimeout(highlightTimer);
             highlightTimer = setTimeout(() => {
                 renderL3Graph();
             }, 5000);
@@ -9211,8 +9237,8 @@
         // ========== 清除选中状态 ==========
         function clearNodeSelection() {
             if (selectedNodeId !== null) {
-                // 清除视觉样式
-                updateNodeVisual(selectedNodeId, false);
+                // 清除视觉样式（安全调用，图表可能已被重置）
+                try { updateNodeVisual(selectedNodeId, false); } catch(e) {}
             }
             
             selectedNodeId = null;
@@ -9227,16 +9253,20 @@
         
         // ========== 更新节点视觉样式 ==========
         function updateNodeVisual(nodeId, isSelected) {
+            if (!myChart) return;
             const node = allNodes.find(n => n.id === nodeId);
             if (!node) return;
             const domainColor = domainColors[node.domain];
             
+            try {
             if (isSelected) {
                 // 获取当前图表选项中的数据
                 const currentOption = myChart.getOption();
+                if (!currentOption?.series?.[0]?.data) return;
                 const currentData = currentOption.series[0].data;
                 // 基于图表实际数据查找index
                 const nodeIndex = currentData.findIndex(n => n.id === nodeId);
+                if (nodeIndex < 0) return;
                 
                 // 重新设置所有节点的样式
                 const newData = currentData.map((n) => {
@@ -9297,6 +9327,9 @@
                 } else {
                     renderL3Graph();
                 }
+            }
+            } catch(e) {
+                console.warn('updateNodeVisual failed:', e.message);
             }
         }
         
